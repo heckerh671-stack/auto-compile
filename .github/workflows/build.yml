@@ -107,7 +107,11 @@ jobs:
                    echo "SODIUM=/usr/local/lib/libsodium.a" >> "$GITHUB_ENV" ;;
             mac)   A="$(brew --prefix libsodium)/lib/libsodium.a"; test -e "$A" || { echo "::error::libsodium.a missing"; exit 1; }
                    echo "SODIUM=$A" >> "$GITHUB_ENV" ;;
-            win)   echo "static libsodium via vcpkg"; echo "SODIUM=-lsodium" >> "$GITHUB_ENV" ;;
+            win)   VROOT=$(echo "$VCPKG_INSTALLATION_ROOT" | tr '\\' '/')
+                   LIBDIR="$VROOT/installed/x64-windows-static/lib"
+                   test -e "$LIBDIR/libsodium.lib" || { echo "::error::vcpkg libsodium.lib missing in $LIBDIR"; exit 1; }
+                   # vcpkg static lib is libsodium.lib (not sodium.lib); add its dir and advapi32 (RtlGenRandom).
+                   echo "SODIUM=-L$LIBDIR -llibsodium -ladvapi32" >> "$GITHUB_ENV" ;;
           esac
       - name: Build native (payload + loader)
         run: sh tools/build_dll.sh ${{ matrix.target }}
