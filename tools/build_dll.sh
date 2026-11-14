@@ -6,6 +6,10 @@
 # Output: src/main/resources/natives/zalard_gui.{dll|so|dylib}  (ZalardNative loads the one per OS).
 # Needs clang + lld. Regenerate the font atlas with tools/gen_atlas.py (or gen_atlas_ttf.py for Inter).
 set -e
+# On Windows/Git-Bash, MSYS rewrites args that look like absolute paths, which turns the MSVC linker
+# flags /noentry, /noimplib, /opt:ref into bogus C:/.../ paths. Exclude all args from that conversion.
+export MSYS2_ARG_CONV_EXCL='*'
+export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")/../native"
 JI=${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}/include
 case "${1:-$(uname -s)}" in
@@ -51,8 +55,9 @@ case "$OS" in
   linux) clang++ --target=x86_64-linux-gnu $COMMON -fPIC -nostdlib -fuse-ld=lld -shared \
            -Wl,--gc-sections -Wl,--strip-all $LDHARD -o "$OUT/zalard_gui.so" zalard_gui.cpp ;;
   mac)   # needs the macOS SDK: build on a Mac, or pass SDKROOT=/path/to/MacOSX.sdk  (ARCH=arm64|x86_64)
+         # -lSystem: macOS requires every dylib to link libSystem, even a -nostdlib one.
          clang++ --target="${ARCH:-arm64}-apple-macos11" $COMMON -fPIC -nostdlib -dynamiclib \
-           -Wl,-x -Wl,-S ${SDKROOT:+-isysroot "$SDKROOT"} -o "$OUT/zalard_gui.dylib" zalard_gui.cpp ;;
+           -Wl,-x -Wl,-S ${SDKROOT:+-isysroot "$SDKROOT"} -o "$OUT/zalard_gui.dylib" zalard_gui.cpp -lSystem ;;
 esac
 echo "built zalard_gui ($OS)"
 

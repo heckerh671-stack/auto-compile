@@ -83,9 +83,16 @@ jobs:
         with: { name: guard-state }
       - run: test -f native/logic/guard_token.h && test -f native/logic/vm_gen.h   # guard restored into place
 
-      - name: Install toolchain + libsodium (Linux)
+      - name: Install toolchain + libsodium (Linux, PIC static from source)
         if: matrix.target == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld libsodium23 libsodium-dev
+        # Ubuntu's packaged libsodium.a is NOT built with -fPIC, so it cannot be linked into the shared
+        # loader (.so). Build a PIC static libsodium from source and install it to /usr/local.
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang lld
+          curl -sSL https://download.libsodium.org/libsodium/releases/libsodium-1.0.20-stable.tar.gz -o /tmp/ls.tgz
+          mkdir -p /tmp/ls && tar xzf /tmp/ls.tgz -C /tmp/ls --strip-components=1
+          ( cd /tmp/ls && ./configure --enable-static --disable-shared --with-pic CFLAGS=-fPIC >/dev/null 2>&1 \
+            && make -j"$(nproc)" >/dev/null 2>&1 && sudo make install >/dev/null 2>&1 )
       - name: Install toolchain + libsodium (macOS)
         if: matrix.target == 'mac'
         run: brew install libsodium llvm
@@ -96,8 +103,8 @@ jobs:
       - name: Resolve SODIUM link + verify dependency present
         run: |
           case "${{ matrix.target }}" in
-            linux) ldconfig -p | grep -q libsodium || { echo "::error::libsodium missing"; exit 1; }
-                   echo "SODIUM=-l:libsodium.a" >> "$GITHUB_ENV" ;;
+            linux) test -e /usr/local/lib/libsodium.a || { echo "::error::PIC libsodium.a missing"; exit 1; }
+                   echo "SODIUM=/usr/local/lib/libsodium.a" >> "$GITHUB_ENV" ;;
             mac)   A="$(brew --prefix libsodium)/lib/libsodium.a"; test -e "$A" || { echo "::error::libsodium.a missing"; exit 1; }
                    echo "SODIUM=$A" >> "$GITHUB_ENV" ;;
             win)   echo "static libsodium via vcpkg"; echo "SODIUM=-lsodium" >> "$GITHUB_ENV" ;;
