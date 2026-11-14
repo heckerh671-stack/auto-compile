@@ -147,8 +147,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Java 25 runtime: Fabric Loom 1.19.x needs JVM >= 25 to run Gradle (the mod still targets Java 21
+      # via build.gradle's release=21). The test job stays on 21 because it never invokes Gradle.
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: '21' }
+        with: { distribution: temurin, java-version: '25' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - run: sudo apt-get update && sudo apt-get install -y libsodium23 libsodium-dev
