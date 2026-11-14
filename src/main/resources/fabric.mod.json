@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "zalard",
+  "version": "${version}",
+  "name": "Zalard",
+  "description": "Zalard client",
+  "authors": [
+    "weksom"
+  ],
+  "contact": {},
+  "license": "LicenseRef-Zalard-Proprietary (All Rights Reserved) - see LICENSE",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.zalard.adapter.ZalardMod"
+    ]
+  },
+  "mixins": [
+    {
+      "config": "zalard.mixins.json",
+      "environment": "client"
+    },
+    {
+      "config": "zalard.optional.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21"
+  }
+}

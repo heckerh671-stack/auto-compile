@@ -1,0 +1,6 @@
+
+# per-release payload key (held by the auth server, never in the jar/git)
+tools/.release_key
+
+# publisher Ed25519 private signing key (never commit or ship)
+tools/.release_signing_key

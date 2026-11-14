@@ -1,0 +1,14 @@
+name = "zalard-auth"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+# One KV namespace holds accounts, sessions and rate-limit buckets.
+# Create it once:  npx wrangler kv namespace create KV
+# then paste the printed id below.
+[[kv_namespaces]]
+binding = "KV"
+id = "1da7dcf24baa4aea81ad6e836f4d1e48"
+
+# Secrets are NOT stored here — set them with wrangler (see README):
+#   PAYLOAD_KEY  = the 32-byte payload key as 64 hex chars (printed by tools/gen_guard.py)
+#   ADMIN_KEY    = a long random string you keep private (used by /admin/* endpoints)

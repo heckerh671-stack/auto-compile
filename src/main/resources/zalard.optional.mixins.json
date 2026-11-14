@@ -1,0 +1,21 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "dev.zalard.adapter.mixinopt",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "FreecamCameraMixin",
+    "FreecamTurnMixin",
+    "FreecamHandMixin",
+    "MinecraftAccessor",
+    "SprintHoldMixin",
+    "SpoofPluginTextMixin",
+    "SpoofTabOverlayMixin",
+    "SpoofEntityTextMixin",
+    "SpoofTextDisplayMixin",
+    "TextureManagerAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

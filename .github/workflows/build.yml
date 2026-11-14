@@ -1,31 +1,200 @@
-name: Infinite Plugin Auto-Compiler
+name: build
+
+# Production, cross-platform release build.
+#
+# KEY HANDLING (critical): the payload key (secret ZALARD_PAYLOAD_KEY) is NEVER uploaded as an artifact and
+# NEVER printed. Only the `release` job — the one that seals — materializes it, from the secret, into a
+# local file that is scrubbed at the end. The shared guard artifact carries ONLY the generated guard
+# sources (token + VM), no key.
+#
+# Flow:
+#   test     -> all automated security tests
+#   prepare  -> gen_guard (throwaway key, --quiet); publish guard sources only
+#   native   -> matrix {ubuntu, windows, macos}: build that OS's payload+loader, verify its native decrypt
+#   release  -> seed key from secret, production-config gates, seal, audit artifacts, build jar, scrub key
+#
+# STATUS: the ubuntu leg is exercised in dev. The windows/macos legs are IMPLEMENTED but NOT verified by the
+# author (no Windows/macOS available). Per the cross-platform rule, they are "pending first green run" — do
+# not treat Windows/macOS as supported until this workflow is green on each.
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Code Repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: sudo apt-get update && sudo apt-get install -y libsodium23 libsodium-dev
+      - name: Crypto negative tests
+        run: python3 tools/test_crypto.py
+      - name: Auth server tests
+        run: cd auth-server && node worker_test.mjs
+      - name: Auth config tests
+        run: |
+          javac -d out src/main/java/dev/zalard/auth/Auth.java src/test/java/dev/zalard/auth/AuthConfigTest.java
+          java -cp out dev.zalard.auth.AuthConfigTest
+      - name: Signed-update tests
+        run: |
+          python3 tools/test_sign.py
+          python3 tools/test_sign.py --fixtures /tmp/fx
+          javac -d outu src/main/java/dev/zalard/update/*.java src/test/java/dev/zalard/update/UpdateVerifierTest.java
+          java -cp outu dev.zalard.update.UpdateVerifierTest /tmp/fx
 
-    - name: Set Up Java JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
-        cache: maven
+  prepare:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      # Generate the per-release guard ONCE (shared by every platform). No key is needed here: gen_guard
+      # makes a throwaway key (not uploaded, suppressed with --quiet) and the guard sources don't contain it.
+      - name: Generate guard sources
+        run: python3 tools/gen_guard.py --quiet
+      - name: Publish guard sources ONLY (never the key)
+        uses: actions/upload-artifact@v4
+        with:
+          name: guard-state
+          path: |
+            native/logic/guard_token.h
+            native/logic/vm_gen.h
+            src/main/java/dev/zalard/nat/Z.java
 
-    - name: Compile and Package Jar with Maven
-      run: mvn clean package --file pom.xml
+  native:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: linux, ext: so }
+          - { os: windows-latest, target: win,   ext: dll }
+          - { os: macos-latest,   target: mac,   ext: dylib }
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: guard-state }
+      - run: test -f native/logic/guard_token.h && test -f native/logic/vm_gen.h   # guard restored into place
 
-    - name: Upload Completed Plugin Jar
-      uses: actions/upload-artifact@v4
-      with:
-        name: weksom-core-26.2-built
-        path: target/*.jar
+      - name: Install toolchain + libsodium (Linux)
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang lld libsodium23 libsodium-dev
+      - name: Install toolchain + libsodium (macOS)
+        if: matrix.target == 'mac'
+        run: brew install libsodium llvm
+      - name: Install libsodium (Windows, vcpkg static)
+        if: matrix.target == 'win'
+        run: vcpkg install libsodium:x64-windows-static
+
+      - name: Resolve SODIUM link + verify dependency present
+        run: |
+          case "${{ matrix.target }}" in
+            linux) ldconfig -p | grep -q libsodium || { echo "::error::libsodium missing"; exit 1; }
+                   echo "SODIUM=-l:libsodium.a" >> "$GITHUB_ENV" ;;
+            mac)   A="$(brew --prefix libsodium)/lib/libsodium.a"; test -e "$A" || { echo "::error::libsodium.a missing"; exit 1; }
+                   echo "SODIUM=$A" >> "$GITHUB_ENV" ;;
+            win)   echo "static libsodium via vcpkg"; echo "SODIUM=-lsodium" >> "$GITHUB_ENV" ;;
+          esac
+      - name: Build native (payload + loader)
+        run: sh tools/build_dll.sh ${{ matrix.target }}
+
+      - name: Per-platform native decrypt test (Linux executes the .so)
+        if: matrix.target == 'linux'
+        run: |
+          JI=$JAVA_HOME/include
+          clang++ -std=c++17 -O2 -I"$JI" -I"$JI/linux" -DZL_SELFTEST native/zalard_loader.cpp $SODIUM -o zl_selftest
+          python3 - <<'PY'
+          import os,sys; sys.path.insert(0,"tools"); import zcrypto
+          k=os.urandom(32); pt=os.urandom(5000)
+          open("k","w").write(k.hex()); open("s","wb").write(zcrypto.seal(pt,k)); open("p","wb").write(pt)
+          PY
+          ./zl_selftest "$(cat k)" s o && cmp p o && echo "native decrypt == original"
+
+      - name: Confirm stripped / no debug info (Linux)
+        if: matrix.target == 'linux'
+        run: |
+          file src/main/resources/natives/zalard_gui.so | grep -q 'stripped' || { echo "::error::payload not stripped"; exit 1; }
+          file src/main/resources/natives/zalard_loader.so | grep -q 'stripped' || { echo "::error::loader not stripped"; exit 1; }
+          ! readelf -S src/main/resources/natives/zalard_gui.so | grep -q '\.debug' || { echo "::error::debug sections present"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: |
+            src/main/resources/natives/zalard_gui.${{ matrix.ext }}
+            src/main/resources/natives/zalard_loader.${{ matrix.ext }}
+
+  release:
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: sudo apt-get update && sudo apt-get install -y libsodium23 libsodium-dev
+      - uses: actions/download-artifact@v4
+        with: { name: guard-state }
+      - uses: actions/download-artifact@v4
+        with: { pattern: native-*, merge-multiple: true, path: src/main/resources/natives }
+
+      # Production-config gates: fail the RELEASE build if the deployment constants are unset (fail-closed).
+      - name: Production config gates
+        run: |
+          javac -d outc src/main/java/dev/zalard/auth/Auth.java src/test/java/dev/zalard/auth/AuthConfigTest.java
+          java -cp outc dev.zalard.auth.AuthConfigTest --release     # fails if AUTH_BASE is still placeholder
+          grep -q 'PUBLISHER_KEY = ""' src/main/java/dev/zalard/update/UpdateVerifier.java \
+            && { echo "::error::UpdateVerifier.PUBLISHER_KEY is empty — set the publisher public key before a release"; exit 1; } || true
+
+      # Materialize the payload key from the secret ONLY here, only in a local file.
+      - name: Require + load release key (from secret, never an artifact)
+        env: { ZALARD_PAYLOAD_KEY: "${{ secrets.ZALARD_PAYLOAD_KEY }}" }
+        run: |
+          [ -n "$ZALARD_PAYLOAD_KEY" ] || { echo "::error::ZALARD_PAYLOAD_KEY secret not set"; exit 1; }
+          printf '%s' "$ZALARD_PAYLOAD_KEY" | grep -Eq '^[0-9a-fA-F]{64}$' || { echo "::error::ZALARD_PAYLOAD_KEY must be 64 hex"; exit 1; }
+          printf '%s\n' "$ZALARD_PAYLOAD_KEY" > tools/.release_key
+
+      - name: Seal all platform payloads
+        run: python3 tools/seal.py
+
+      - name: Verify + audit release artifacts
+        run: |
+          set -e
+          N=src/main/resources/natives
+          for ext in bin so.bin dylib.bin; do
+            [ -f "$N/zalard_gui.$ext" ] || continue
+            head -c 4 "$N/zalard_gui.$ext" | grep -q 'ZLD1' || { echo "::error::$N/zalard_gui.$ext not ZLD1 format"; exit 1; }
+          done
+          ls "$N"/zalard_loader.* >/dev/null 2>&1 || { echo "::error::no loader stub packaged"; exit 1; }
+          ! ls "$N"/zalard_gui.{dll,so,dylib} >/dev/null 2>&1 || { echo "::error::plaintext payload left in resources"; exit 1; }
+          # no secrets must be anywhere in the tree that gets packaged
+          ! find src -name '.release_key' -o -name '.release_signing_key' | grep -q . || { echo "::error::a key file is under src/"; exit 1; }
+
+      - name: Gradle build
+        run: |
+          chmod +x gradlew
+          ./gradlew build --no-daemon --stacktrace
+
+      - name: Audit the built jar (no keys / no plaintext payload)
+        run: |
+          set -e
+          JAR=$(ls build/libs/*.jar | head -1)
+          ! unzip -l "$JAR" | grep -E '\.release_key|\.release_signing_key|zalard-auth\.properties' || { echo "::error::secret/credential file in jar"; exit 1; }
+          ! unzip -l "$JAR" | grep -E 'natives/zalard_gui\.(dll|so|dylib)$' || { echo "::error::plaintext payload in jar"; exit 1; }
+          unzip -l "$JAR" | grep -q 'natives/zalard_gui.*\.bin' || { echo "::error::no sealed payload in jar"; exit 1; }
+          echo "jar audit passed: $JAR"
+
+      - uses: actions/upload-artifact@v4
+        with: { name: zalard-jar, path: build/libs/*.jar, if-no-files-found: error }
+
+      - name: Scrub release key
+        if: always()
+        run: rm -f tools/.release_key

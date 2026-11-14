@@ -1,0 +1,130 @@
+# One table of bridge operations, shared by the C++ logic (native/logic/ops.h) and the Java bridge
+# (src/main/java/dev/zalard/nat/Op.java), so the numbers can never drift apart.
+#   python3 tools/gen_ops.py
+import os
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# numeric ops: Bridge.d(op, a, b, c, d, e, f, g) -> double
+D = """
+SNAP_SELF        fills the self block, returns 1 in game / 0 not
+SNAP_ENTS        a=radius: entity records into the entity buffer, returns count
+SNAP_INV         inventory records into the inventory buffer
+CROSSHAIR_ENT    a=reach: living entity id under the crosshair or -1
+RAYCAST_ENT      a=yaw b=pitch c=reach: living entity id along that look or -1
+LOS              a..f = from xyz, to xyz: 1 = clear line of sight
+BLOCK_FLAGS      a,b,c = xyz: 1 air 2 replaceable 4 solid 8 liquid 16 water
+CROSSHAIR_BLOCK  OUT = x,y,z,face,hx,hy,hz; returns 7 or 0
+RAYCAST_BLOCK    a=yaw b=pitch c=reach; same as CROSSHAIR_BLOCK
+ANCHOR_CHARGE    a,b,c = xyz
+CROSSHAIR_CRYSTAL end crystal id under crosshair or -1
+SET_SILENT       a=yaw b=pitch
+CLEAR_SILENT
+SWING            a=1 main hand
+USE_ITEM_ON      a,b,c=xyz d=face*2+main e,f,g = hit
+ATTACK           a=entity id
+PRESS_HOTBAR     a=slot
+CLICK_ATTACK
+CONSUME_ATTACK
+CLICK_USE
+CONSUME_USE      returns how many
+PRESS_SWAP_OFFHAND
+SET_USE_KEY      a=down
+RESTORE_USE_KEY
+SET_FWD          a=down
+RESTORE_FWD
+SET_BACK         a=down
+RESTORE_BACK
+SET_SPRINT       a=down
+RESTORE_SPRINT
+STOP_SPRINT
+JUMP
+SET_VEL          a,b,c
+SET_ROT          a=yaw b=pitch (real camera)
+SET_RCD          a=ticks
+SET_FREECAM      a=on b=speed
+OPEN_INV
+CLOSE_SCREEN
+SWAP_TO_HOTBAR   a=inv slot b=hotbar
+SWAP_SLOT_OFFHAND a=inv slot
+INV_SLOT_POS     a=inv slot: OUT = x,y; returns 1/0
+CURSOR_POS       OUT = x,y; returns 1/0
+SET_CURSOR       a,b
+KEY_DOWN         a=glfw key (-100.. mouse): held in game
+BIND_HELD        a=bind code: held, no screen open
+OPEN_GUI
+PROJECT_BOX      a..f box: OUT = x0,y0,x1,y1; returns 1/0
+PROJECT_POINT    a,b,c: OUT = x,y; returns 1/0
+ESP_LINE         a..f = world xyz xyz, g = argb
+LINE_WIDTH       a=px
+CRYSTALS_NEAR    a=radius: OUT = id,x,y,z per crystal; returns count
+STORAGE_NEAR     a=radius: OUT = x,y,z,kind per block entity (1 chest 2 shulker 3 ender 4 barrel); returns count
+CAM_GET          OUT = yaw,pitch,ok(no screen),sensitivity; returns 1/0 (render thread)
+CAM_TURN         a=dyaw b=dpitch (camera, keeps last-frame angles in step)
+SPOOF_FLAGS      a=bits (1 own nametag, 2 cape)
+SAVE_NOW         Java: nothing (reserved)
+SELF_VEL         OUT = vx,vy,vz (fresh)
+SPEAR_STAB       sends the modded STAB player-action packet (spear lunge)
+ITEMS_NEAR       a=radius: OUT = x,y,z per dropped item matching the Item ESP filter; returns count
+PEARL_POS        OUT = x,y,z of your most-recently-thrown ender pearl; returns 1/0
+SET_HIT_TARGET   a = entity id: point the client crosshair (hitResult) at it for this tick, so a
+                 simulated attack-click lands on it (used by Simulate Clicks with silent aim)
+"""
+# string-arg ops: Bridge.t(op, a, b, c) -> double
+T = """
+CHAT             a = message
+WRITE_FILE       a = path under .minecraft/zalard, b = content
+DELETE_FILE      a = path
+SPOOF_NAME       a = display name ("" = off)
+SPOOF_SKIN       a = skin owner name ("" = off)
+SPOOF_OTHER      a = target, b = new name, c = skin
+SPOOF_CAPE       a = cape name ("" = off)
+LOG              a = line for latest.log
+SET_ITEM_FILTER  a = item id substring ("" = all) for Item ESP
+SET_DRIP         a = slot 0-5 (helm/chest/legs/boots/main/off), b = fake item id ("" = real)
+SPOTIFY_CONNECT  start the Spotify OAuth flow (opens the consent page in the browser)
+SET_NATIVE_LANG  a = your language code ("en","ru",...) for chat Translation; "" = off
+"""
+# string-returning ops: Bridge.r(op, a) -> String
+R = """
+READ_FILE        a = path -> content or null
+LIST_CONFIGS     -> names joined with \\n
+BLOCK_ID_AT      a = "x y z" -> block id
+SPOTIFY_NOW      -> now-playing line for the HUD ("Song — Artist" + time), or "" if not connected/paused
+SPOTIFY_STATE    -> "off" / "connecting" / "connected" / "error"
+EFFECTS          -> your active potion effects, one per line "Display Name M:SS" (amplifier folded into the name)
+"""
+
+# the self block (Bridge.OUT doubles after D_SNAP_SELF)
+SELF = """X Y Z EX EY EZ YAW PITCH GROUND HEALTH SLOT VX VY VZ FALL STRENGTH USING SCREEN INV_OPEN SPRINTING
+JUMP_KEY USE_KEY FOOD IN_WATER LOOK_STEERED HURT GLIDING PEND_ATK PEND_USE USING_TICKS CAN_ATTACK HOLD_BLOCK
+SILENT SYAW SPITCH SENS FWD_HELD K_FWD K_BACK K_LEFT K_RIGHT K_JUMP K_SNEAK RCD PING FPS TAB_PING CONTAINER
+HSPEED_SQ WORLD_TIME SCREEN_W SCREEN_H FB_W FB_H NETHER SELF_ID CREATIVE""".split()
+
+def parse(src):
+    out = []
+    for line in src.strip().splitlines():
+        name = line.split()[0]
+        doc = line[len(name):].strip()
+        out.append((name, doc))
+    return out
+
+tables = [("D", parse(D)), ("T", parse(T)), ("R", parse(R))]
+h = ["// Generated by tools/gen_ops.py - do not edit.", "#pragma once"]
+j = ["// Generated by tools/gen_ops.py - do not edit.", "package dev.zalard.nat;", "",
+     "/** Bridge operation numbers shared with the native logic (native/logic/ops.h). */",
+     "public final class Op {", "    private Op() {}"]
+for prefix, rows in tables:
+    for i, (n, doc) in enumerate(rows):
+        h.append(f"#define {prefix}_{n} {i + 1}   // {doc}")
+        j.append(f"    public static final int {prefix}_{n} = {i + 1};   // {doc}")
+for i, n in enumerate(SELF):
+    h.append(f"#define SF_{n} {i}")
+    j.append(f"    public static final int SF_{n} = {i};")
+h.append(f"#define SF_COUNT {len(SELF)}")
+j.append(f"    public static final int SF_COUNT = {len(SELF)};")
+j.append("}")
+open(os.path.join(HERE, "..", "native", "logic", "ops.h"), "w").write("\n".join(h) + "\n")
+jp = os.path.join(HERE, "..", "src", "main", "java", "dev", "zalard", "nat")
+os.makedirs(jp, exist_ok=True)
+open(os.path.join(jp, "Op.java"), "w").write("\n".join(j) + "\n")
+print("ops:", sum(len(r) for _, r in tables))

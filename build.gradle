@@ -1,0 +1,43 @@
+// Same setup as your working zalard-build: 1.21.11, Mojang mappings, Java 21.
+plugins {
+    id 'fabric-loom' version '1.19-SNAPSHOT'
+}
+
+version = project.mod_version
+group = project.maven_group
+base { archivesName = project.archives_base_name }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net/' }
+    maven { url = 'https://libraries.minecraft.net/' }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") { expand "version": project.version }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = "UTF-8"
+    it.options.release = 21
+}
+
+// The suites under src/test are standalone main() harnesses run directly via `java` in CI
+// (see .github/workflows/build.yml 'test' job), not JUnit tests. Gradle 9 discovers none and would
+// otherwise fail `:test`; this keeps `./gradlew build` green without changing how the real tests run.
+tasks.named('test') {
+    failOnNoDiscoveredTests = false
+}
+
